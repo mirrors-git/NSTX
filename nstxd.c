@@ -30,8 +30,8 @@
 #include <time.h>
 #include <stdlib.h>
 
-#include "nstxfun.h"
-#include "nstx_pstack.h"
+#include "nstx.h"
+#include "nstxpstack.h"
 #include "nstxdns.h"
 
 #define DNSTIMEOUT 5
@@ -41,9 +41,9 @@
 #define BUFLEN 2000
 
 void nstx_getpacket (void);
-static void split_and_queue_packet(char *buf, int len);
-static void copy_and_queue_data(char *buf, int len, int seq, int frc, int id);
 static struct nstx_senditem * alloc_senditem(void);
+static void queue_senditem(char *buf, int len);
+char *dequeue_senditem (int *len);
 extern int nstx_server_send_packet(char *, int, struct sockaddr_in *);
 struct nstx_senditem * nstx_sendlist = NULL;
 
@@ -60,7 +60,6 @@ int main (int argc, char *argv[]) {
    
    open_tuntap();
    open_ns(NULL);
-   init_pstack(CHUNKLEN);
    
    while (1)
      nstx_getpacket();
@@ -92,11 +91,11 @@ static void do_timeout (struct nstxqueue *q)
    dns_addanswer(pkt, "\xb4\x00\x00\x00", 4, dns_addquery(pkt, q->name));
    buf = dns_constructpacket (pkt, &len);
    sendns(buf, len, &q->peer);
+   free(buf);
 }  
 
 void nstx_getpacket (void) {
-   int len;
-   struct nstx_senditem *senditem;
+   int len, link;
    char *name, *buf;
    struct nstxmsg *msg;
    struct nstxqueue *qitem;
@@ -117,87 +116,40 @@ void nstx_getpacket (void) {
 		    {
 		       nstx_handlepacket(buf, len, &sendtun);
 		    }
-		  
 	       }
 	  }
+	dns_free(pkt);
      } else if (msg->src == FROMTUN)
-	  split_and_queue_packet(msg->data, msg->len);
+	  queue_senditem(msg->data, msg->len);
    }
    
    while (queuelen()) {
-      senditem = nstx_get_senditem();
-      if (!senditem)
+      if (!nstx_sendlist)
 	break;
       qitem = dequeueitem(-1);
       pkt = dns_alloc();
       dns_setid(pkt, qitem->id);
       dns_settype(pkt, DNS_RESPONSE);
-      dns_addanswer(pkt, senditem->data+1, *senditem->data,
-		    dns_addquery(pkt, qitem->name));
+      link = dns_addquery(pkt, qitem->name);
+      len = dns_getfreespace(pkt, DNS_RESPONSE);
+      buf = dequeue_senditem(&len);
+      dns_addanswer(pkt, buf, len, link);
       buf = dns_constructpacket(pkt, &len);
       sendns(buf, len, &qitem->peer);
-      free(senditem);
    }
    timeoutqueue(do_timeout);
 }
 
-static void split_and_queue_packet(char *buf, int len) {
-   int i = 0, seq = 0, frc, last;
-   static int id = 0;
-   
-   id++;
-   
-   frc = len / SENDLEN - 1;
-   if (len % SENDLEN)
-     frc++;
-   
-   while ((len - i) >= SENDLEN) {
-      copy_and_queue_data(buf+i, SENDLEN, seq, frc, id);
-      seq++;
-      i += SENDLEN;
-   }
-   if (i != len) {
-      last = (len % SENDLEN);
-      copy_and_queue_data(buf+i, last, seq, frc, id);
-   }
-}
 
-static void copy_and_queue_data(char *buf, int len, int seq, int frc, int id) {
-   struct nstx_senditem *item;
-   struct nstxhdr nstx;
-   
-   nstx.magic = NSTX_MAGIC;
-   nstx.seq = seq;
-   nstx.frc = frc;
-   nstx.id = id;
-   nstx.crop = 0;
-   nstx.flags = 0;
-   
-   item = alloc_senditem();
-   item->data[0] = len + sizeof(struct nstxhdr);
-   memcpy(item->data + 1, &nstx, sizeof(struct nstxhdr));
-   memcpy(item->data + 1 + sizeof(struct nstxhdr), buf, len);
-}
 
 static struct nstx_senditem * alloc_senditem(void) {
    struct nstx_senditem *ptr = nstx_sendlist;
-   struct nstxhdr *hdr;
-   struct nstxhdr tmphdr;
 
    if (!nstx_sendlist) {
       ptr = nstx_sendlist = malloc(sizeof(struct nstx_senditem));
    } else {
-      while (ptr->next) {
-	hdr = (struct nstxhdr *) ((char *)ptr->data+1);
-	memcpy(&tmphdr, hdr, sizeof(struct nstxhdr));
-	tmphdr.flags = NSTX_MF;
-	memcpy(hdr, &tmphdr, sizeof(struct nstxhdr));
+      while (ptr->next)
 	ptr = ptr->next;
-      }
-      hdr = (struct nstxhdr *) ((char *)ptr->data+1);
-      memcpy(&tmphdr, hdr, sizeof(struct nstxhdr));
-      tmphdr.flags = NSTX_MF;
-      memcpy(hdr, &tmphdr, sizeof(struct nstxhdr));
       ptr->next = malloc(sizeof(struct nstx_senditem));
       ptr = ptr->next;
    }
@@ -207,3 +159,42 @@ static struct nstx_senditem * alloc_senditem(void) {
    return ptr;
 }
 
+static void queue_senditem(char *buf, int len) {
+   static int id = 0;
+   struct nstx_senditem *item;
+   
+   item = alloc_senditem();
+   item->data = malloc(len);
+   memcpy(item->data, buf, len);
+   item->len = len;
+   item->id = ++id;
+}
+
+char *dequeue_senditem (int *len) {
+   static char *buf = NULL;
+   struct nstx_senditem *item = nstx_sendlist;
+   struct nstxhdr *nh;
+   int remain, dlen;
+   
+   remain = item->len - item->offset;
+   dlen = *len - sizeof(struct nstxhdr);
+   if (dlen > remain)
+     dlen = remain;
+   *len = dlen + sizeof(struct nstxhdr);
+   buf = realloc(buf, *len);
+   nh = (struct nstxhdr *)buf;
+   memset(nh, 0, sizeof(struct nstxhdr));
+   memcpy(buf+sizeof(struct nstxhdr), item->data + item->offset, dlen);
+   nh->magic = NSTX_MAGIC;
+   nh->seq = item->seq++;
+   nh->id = item->id;
+   item->offset += dlen;
+   if (item->offset == item->len) {
+      nh->flags = NSTX_LF;
+      nstx_sendlist = item->next;
+      free(item->data);
+      free(item);
+   }
+   
+   return buf;
+}

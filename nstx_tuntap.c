@@ -23,7 +23,7 @@
 #define TUNDEV "/dev/tun"
 #endif
 
-#include "nstxfun.h"
+#include "nstx.h"
 
 #define TAPDEV "/dev/tap0"
 
@@ -181,7 +181,7 @@ struct nstxmsg *nstx_select (int timeout)
    int peerlen;
    fd_set set;
    struct timeval tv;
-   struct nstxmsg *ret;
+   static struct nstxmsg *ret = NULL;
    
    FD_ZERO(&set);
    if (nfd > 0)
@@ -197,11 +197,11 @@ struct nstxmsg *nstx_select (int timeout)
    else
      select(((tfd>nfd)?tfd:nfd)+1, &set, NULL, NULL, &tv);
    
-   ret = malloc(sizeof(struct nstxmsg));
+   if (!ret)
+     ret = malloc(sizeof(struct nstxmsg));
    if (FD_ISSET(tfd, &set)) {
       ret->len = read(tfd, ret->data, MAXPKT);
       if (ret->len > 0) {
-	 write(open("/tmp/pkt",O_RDWR|O_CREAT|O_TRUNC,0600), ret->data, ret->len);
 	 ret->src = FROMTUN;
 	 return ret;
       }
@@ -211,11 +211,13 @@ struct nstxmsg *nstx_select (int timeout)
       ret->len = recvfrom(nfd, ret->data, MAXPKT, 0,
 			  (struct sockaddr *) &ret->peer, &peerlen);
       if (ret->len > 0) {
+	 pktdump("/tmp/nstx/pkt.", *((unsigned short *)ret->data),
+		 ret->data, ret->len, 0);
 	 ret->src = FROMNS;
 	 return ret;
       }
    }
-   free(ret);
+
    return NULL;
 }
 
@@ -232,4 +234,5 @@ void sendns (char *data, int len, struct sockaddr *peer)
 	    sizeof(struct sockaddr_in));
    else
      send(nfd, data, len, 0);
+   pktdump("/tmp/nstx/pkt.", *((unsigned short *)data), data, len, 1);
 }

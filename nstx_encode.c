@@ -80,7 +80,6 @@ unsigned char *nstx_decode(unsigned char *data, int *rlen) {
       off += 4;
    }
    *rlen = i - revmap[data[0]];
-//   printf("Decoded %d to %d (cut %d)\n", len, *rlen, revmap[data[0]]);
    
    return buf;
 }

@@ -6,8 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "nstxfun.h"
-
+#include "nstx.h"
 #include "nstxdns.h"
 
 /* lbl2str: Decodes a domainname to a string
@@ -75,50 +74,6 @@ char *str2lbl (char *data) {
    buflen++;
    
    return buf;
-}
-
-/* Simply removes all dots... Duplicates the string first*/
-
-char *remove_dots (char *str) {
-   char *p1, *p2;
-   
-   p2 = p1 = str = strdup(str);
-   
-   while (*p1) {
-      if (*p1 != '.')
-	*(p2++) = *(p1++);
-      else
-	p1++;
-   }
-   *p2 = '\0';
-   return str;
-}
-
-#define LBLLEN 63
-
-/* Inserts dots every LBLLEN'th char */
-
-char *insert_dots (char *str) {
-   char *ptr, *res;
-   int len;
-   
-   len = strlen(str);
-   res = ptr = malloc(len + len/LBLLEN + 1);
-   
-   while (len > LBLLEN) {
-      memcpy(ptr, str, LBLLEN);
-      ptr[LBLLEN] = '.';
-      ptr += LBLLEN + 1;
-      str += LBLLEN;
-      len -= LBLLEN;
-   }
-   if (len) {
-      memcpy(ptr, str, len);
-      ptr += len;
-   }
-   *ptr = '\0';
-   
-   return res;
 }
 
 /* decompress_label decompresses the label pointed to by 'lbl' inside the
@@ -260,80 +215,6 @@ unsigned char *lbl2data (unsigned char *data)
    return buf;
 }
 
-/* This routine sends a DNS-packet through fd to peer.
- * id is the id of the DNS-packet
- * type is 0 for request, 1 for answer
- * name is the hostname to be queried/answered
- * data is only used for answers and contains the data in the TXT-record.
- *      Format: <length-byte><data-bytes....>                             */
-
-int send_dns_msg (int id, int type, 
-		   char *name, unsigned char *data,
-		   struct sockaddr *peer) {
-#if 0
-   unsigned char buf[512];
-   unsigned short _id = id;
-   int len, totlen;
-   
-   if (type && !data)
-     data = "\x04\xb4\x00\x00\x00"; /* An nstx-NULL-packet */
-   
-   memset(buf, 0, sizeof(buf));
-   
-   /* DNS-Header */
-   *((unsigned short*)buf) = _id;
-   if (type)
-     buf[2] = 0x84; /* Flags: Response, Authoritative Answer */
-   else
-     buf[2] = 0x01; /* Flags: Recursion desired */
-   buf[5] = 0x01; /* QDCOUNT = 1 */
-   if (type)
-     buf[7] = 0x01; /* ANCOUNT = 1 */
-   totlen = 12;
-   
-   /* Query-Section */
-   len = strlen(name) + 1; /* +1 since we need to copy the '\0'-Byte */
-      
-   memcpy(buf + totlen, name, len); /* Our hostname */
-   buf[totlen+len+1] = 16; /* Type is TXT-record */
-   buf[totlen+len+3] = 1; /* Class is IN */
-   totlen += len + 4;
-   
-   /* Answer-Section */
-   if (type) {
-      len = *data + 1;
-      buf[totlen] = 192;           /* Pointer to name in the qd- */
-      buf[totlen+1] = 12;          /* section (offset 12)        */
-      buf[totlen+3] = 16; /* Type is TXT-Record */
-      buf[totlen+5] = 1;  /* Class is IN */
-      buf[totlen+11] = len; /* RDLENGTH */
-      memcpy(buf+totlen+12, data, len); /* Our data */
-      totlen += len + 13;
-   }
-#endif
-   struct dnspkt *pkt;
-   char *buf;
-   int len;
-   
-   if (type && !data)
-     data = "\x04\xb4\x00\x00\x00"; /* An nstx-NULL-packet */
-
-   pkt = dns_alloc();
-   dns_setid(pkt, id);
-   dns_settype(pkt, type?DNS_RESPONSE:DNS_QUERY);
-   if (data)
-     dns_addanswer(pkt, data+1, *data, dns_addquery(pkt, name));
-   else
-     dns_addquery(pkt, name);
-   buf = dns_constructpacket(pkt, &len);
-//   write(open("/tmp/bla", O_RDWR|O_CREAT|O_TRUNC), buf, len);
-   sendns(buf, len, peer);
-   
-   return len;
-}
-
-/* New DNS-Code */
-
 static struct rr *_new_listitem (struct rr **list)
 {
    struct rr *rrp, *tmp;
@@ -387,10 +268,12 @@ static __inline__ int _get_listlen (struct rr *list)
 }
 
 static char *suffix = NULL;
+static int suffixlen = 0;
 
 void dns_setsuffix (char *suf)
 {
    suffix = str2lbl(suf);
+   suffixlen = strlen(suf)+1;
 }
 
 struct dnspkt *dns_alloc (void)
@@ -443,11 +326,8 @@ char *dns_data2fqdn (char *data)
    char *ptr;
    static char *fqdn = NULL;
    
-   if (fqdn)
-     free(fqdn);
-   
    ptr = data2lbl(data);
-   fqdn = malloc(strlen(ptr)+strlen(suffix)+1);
+   fqdn = realloc(fqdn, strlen(ptr)+strlen(suffix)+1);
    strcpy(fqdn, ptr);
    strcat(fqdn, suffix);
    
@@ -531,7 +411,7 @@ unsigned char *dns_constructpacket (struct dnspkt *pkt, int *l)
    if (len > 512)
      printf("WARNING: Constructed non-conform DNS-packet (size: %d)\n", len);
    
-   offsets = malloc(qdcount * 4);
+   offsets = alloca(qdcount * 4);
    
    /* Header */
    buf[0] = pkt->id / 256;
@@ -676,7 +556,6 @@ char *dns_getquerydata (struct dnspkt *pkt)
    return ret;
 }
 
-
 char *dns_getanswerdata (struct dnspkt *pkt, int *len)
 {
    struct rr *q;
@@ -696,4 +575,27 @@ char *dns_getanswerdata (struct dnspkt *pkt, int *len)
    
    free(q);
    return ret;
+}
+
+int dns_getfreespace (struct dnspkt *pkt, int type)
+{
+   int raw, ret, maxq;
+   
+   raw = DNS_MAXPKT - dns_getpktsize(pkt);
+   
+   if (raw < 0)
+     return -1;
+   
+   if (type == DNS_RESPONSE) {
+      ret = raw - 14;
+      if (ret > 253)
+	ret = 253;
+   } else if (type == DNS_QUERY)
+     {
+	ret = (189*(254-suffixlen))/256-6;
+	if (ret > (maxq = (183-(189*suffixlen)/256)))
+	  ret = maxq;
+     }
+   
+   return (ret > 0) ? ret : 0;
 }

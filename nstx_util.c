@@ -23,6 +23,8 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <stdio.h>
 
 #include "nstx.h"
 
@@ -42,4 +44,15 @@ void dwrite (char *path, char *buf, int len) {
    fd = open(path, O_RDWR|O_CREAT|O_TRUNC, 0600);
    write(fd, buf, len);
    close(fd);
+}
+
+void pktdump (char *prefix, unsigned short id, char *data, int len, int s) {
+   int fd;
+   char buf[30];
+   return;
+   snprintf(buf, 30, "%s%hu%c", prefix, id, s ? 's' : 'r');
+   if ((fd = open(buf, O_WRONLY|O_CREAT|O_TRUNC, 0600)) >= 0) {
+      write(fd, data, len);
+      close(fd);
+   }
 }

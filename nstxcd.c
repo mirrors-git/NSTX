@@ -38,12 +38,11 @@
 
 #include <time.h>
 
-#include "nstxfun.h"
-#include "nstx_dns.h"
+#include "nstx.h"
 #include "nstxdns.h"
-#include "nstx_pstack.h"
+#include "nstxpstack.h"
 
-#define DRQLEN 1
+#define DRQLEN 10
 
 static void nstxc_handle_reply(char *, int);
 static int nstxc_send_packet(char *, int);
@@ -55,7 +54,7 @@ int main (int argc, char * argv[]) {
   struct nstxmsg *msg;
 
   nsid = time(NULL);
-
+   
   if (argc < 3) {
     fprintf(stderr, "Usage: ./nstxcd <domainname> <dns-server>\n");
     fprintf(stderr, "Example: ./nstxcd tun.yomama.com 125.23.53.12\n");
@@ -64,7 +63,6 @@ int main (int argc, char * argv[]) {
 
   dns_setsuffix(argv[1]);
 
-  init_pstack (SENDLEN);
   qsettimeout(10);
   open_tuntap();
   open_ns(argv[2]);
@@ -94,62 +92,62 @@ static void nstxc_handle_reply (char * reply, int len) {
    pkt = dns_extractpkt (reply, len);
    if (!pkt)
      return;
-   data = dns_getanswerdata(pkt, &datalen);
-   data = txt2data(data, &datalen);
-   nstx_handlepacket (data, datalen, &sendtun);
+   while ((data = dns_getanswerdata(pkt, &datalen))) {
+      data = txt2data(data, &datalen);
+      nstx_handlepacket (data, datalen, &sendtun);
+   }
    dequeueitem(pkt->id);
    dns_free(pkt);
 }
   
-static int nstxc_send_packet (char * buf, int len) {
-  char *p;
-  int chunks, rest;
-  char hbuf[HCHUNKLEN];
-  char *fqdn;
+static int nstxc_send_packet (char *data, int datalen) {
   static int id = -1;
+
+  char *p;
   struct nstxhdr nh;
+  struct dnspkt *pkt;
+  int l;
 
   if (id < 0)
     id = time(NULL);
-
+        
   nh.magic = NSTX_MAGIC;
   nh.seq = 0;
-  nh.frc = 0;
   nh.id = id++;
-  nh.crop = 0;
   nh.flags = 0;
 
-  p = buf;
-  chunks = len / CHUNKLEN;
-  rest = len % CHUNKLEN;
-  if (len)
-    nh.frc = chunks - (rest ? 0 : 1);
-
-  while (chunks) {
-    memcpy (hbuf, (char*)&nh, sizeof(nh));
-    memcpy (hbuf + sizeof(nh), p, CHUNKLEN);
-    fqdn = dns_data2fqdn(nstx_encode(hbuf, sizeof(nh)+CHUNKLEN));
-    send_dns_msg (nsid,0,fqdn,NULL,NULL);
+  do {
+    pkt = dns_alloc();
+    dns_settype(pkt, DNS_QUERY);
+    dns_setid(pkt, nsid);
+    
+    l = dns_getfreespace(pkt, DNS_QUERY);
+    if (l <= 0) {
+       printf("Fatal: no free space in dns-packet?!\n");
+       exit(1);
+    }
+    p = malloc(l);
+    l -= sizeof(nh);
+    if (l > datalen) {
+       l = datalen;
+       nh.flags = NSTX_LF;
+    }
+    memcpy (p, (char*)&nh, sizeof(nh));
+    if (data)
+       memcpy (p + sizeof(nh), data, l);
+    data += l;
+    datalen -= l;
+    
+    dns_addquery(pkt, dns_data2fqdn(nstx_encode(p, sizeof(nh)+l)));
+    free(p);
+    p = dns_constructpacket(pkt, &l);
+    sendns(p, l, NULL);
+    free(p);
 
     queueid(nsid);
     nsid++;
-
-    p += CHUNKLEN;
-    chunks--;
     nh.seq++;
-  }
-
-  if (rest | !chunks) {
-    nh.crop = 2 - (rest % 3);
-    memcpy (hbuf, (char*)&nh, sizeof(nh));
-    memcpy (hbuf + sizeof(nh), p, rest);
-
-    fqdn = dns_data2fqdn(nstx_encode(hbuf, sizeof(nh)+rest));
-    send_dns_msg (nsid,0,fqdn,NULL,NULL);
-
-    queueid(nsid);
-    nsid++;
-  }
+  } while (datalen);
 
   return 0;
 }

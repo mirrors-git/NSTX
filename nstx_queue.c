@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include "nstxfun.h"
+#include "nstx.h"
 
 static struct nstxqueue *qhead = NULL;
 static int qlen = 0;
@@ -77,6 +77,7 @@ struct nstxqueue *dequeueitem (int id)
 		  qlen--;
 		  break;
 	       }
+	     ptr = tmp;
 	  }
      }
    

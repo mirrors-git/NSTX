@@ -25,23 +25,18 @@
 #include <time.h>
 
 #include <sys/time.h>
+#include <netinet/in.h>
 
 #include "nstx.h"
-#include "nstx_pstack.h"
+#include "nstxpstack.h"
 
 static struct nstx_item * get_item_by_id(unsigned int id);
-static struct nstx_item * alloc_item(int frc, unsigned int id);
-static char * dealloc_item(struct nstx_item *ptr);
+static struct nstx_item * alloc_item(unsigned int id);
+static char * dealloc_item(struct nstx_item *ptr, int *l);
 static int add_data(struct nstx_item *item, struct nstxhdr *pkt, int datalen);
 static void check_timeouts(void);
 
 static struct nstx_item *nstx_list = NULL;
-
-static int chunklen = -1;
-
-void init_pstack (int len) {
-   chunklen = len;
-}
 
 void nstx_handlepacket(char *ptr, int len,
 			 void (*nstx_usepacket)(char*,int)) {
@@ -49,23 +44,20 @@ void nstx_handlepacket(char *ptr, int len,
    struct nstx_item *nstxitem;
    char *netpacket;
    int netpacketlen;
-   int datalen;
    
    if ((!ptr) || len < sizeof(struct nstxhdr))
      return;
 
-   if (((datalen = len - sizeof(struct nstxhdr)) < 1) ||
-	(datalen > chunklen))
+   if (!nstxpkt->id)
      return;
    
    nstxitem = get_item_by_id(nstxpkt->id);
    
    if (!nstxitem)
-     nstxitem = alloc_item(nstxpkt->frc, nstxpkt->id);
+     nstxitem = alloc_item(nstxpkt->id);
    
-   if (add_data(nstxitem, nstxpkt, datalen)) {
-      netpacketlen = nstxitem->datalen;
-      netpacket = dealloc_item(nstxitem);
+   if (add_data(nstxitem, nstxpkt, len)) {
+      netpacket = dealloc_item(nstxitem, &netpacketlen);
       nstx_usepacket(netpacket, netpacketlen);
    }
    check_timeouts();
@@ -85,10 +77,9 @@ static struct nstx_item * get_item_by_id(unsigned int id) {
    return NULL;
 }
 
-static struct nstx_item * alloc_item(int frc, unsigned int id) {
+static struct nstx_item * alloc_item(unsigned int id) {
    struct nstx_item *ptr;
    
-   fflush(stdout);
    ptr = malloc(sizeof(struct nstx_item));
    memset(ptr, 0, sizeof(struct nstx_item));
    ptr->next = nstx_list;
@@ -96,14 +87,14 @@ static struct nstx_item * alloc_item(int frc, unsigned int id) {
      ptr->next->prev = ptr;
    nstx_list = ptr;
    
-   ptr->data = malloc((frc+1) * chunklen);
-   ptr->frc = frc;
    ptr->id = id;
    return ptr;
 }
 
-static char * dealloc_item(struct nstx_item *ptr) {
-   char *data;
+static char * dealloc_item(struct nstx_item *ptr, int *l) {
+   static char *data = NULL;
+   int len = 0;
+   struct clist *c, *tmp;
    
    if (ptr->prev)
      ptr->prev->next = ptr->next;
@@ -112,34 +103,78 @@ static char * dealloc_item(struct nstx_item *ptr) {
    if (ptr->next)
      ptr->next->prev = ptr->prev;
    
-   data = ptr->data;
+   c = ptr->chunks;
+   while (c) {
+      data = realloc(data, len+c->len);
+      memcpy(data+len, c->data, c->len);
+      len += c->len;
+      free(c->data);
+      tmp = c->next;
+      free(c);
+      c = tmp;
+   }
    free(ptr);
-
+   
+   if (l)
+     *l = len;
    return data;
 }
+
+static void add_data_chunk(struct nstx_item *item, int seq,
+			   char *data, int len) {
+   struct clist *next, *prev, *ptr;
+   
+   prev = next = NULL;
+   if (!item->chunks)
+     ptr = item->chunks = malloc(sizeof(struct clist));
+   else if (item->chunks->seq == seq)
+     return;
+   else if (item->chunks->seq > seq) {
+      next = item->chunks;
+      ptr = item->chunks = malloc(sizeof(struct clist));
+   } else {
+      prev = item->chunks;
+      while (prev->next && (prev->next->seq < seq))
+	prev = prev->next;
+      next = prev->next;
+      if (next && (next->seq == seq))
+	return;
+      ptr = malloc(sizeof(struct clist));
+   }
+   memset(ptr, 0, sizeof(struct clist));
+   if (prev)
+     prev->next = ptr;
+   ptr->next = next;
+   ptr->seq = seq;
+   ptr->len = len;
+   ptr->data = malloc(len);
+   memcpy(ptr->data, data, len);
+}
+
+static int find_sequence (struct nstx_item *item) {
+   struct clist *list;
+   int i;
+   
+   for (i = 0, list = item->chunks; list; i++, list = list->next)
+     if (list->seq != i)
+       break;
+   
+   return i;
+}  
 
 static int add_data(struct nstx_item *item, struct nstxhdr *pkt, int datalen) {
    char *payload;
    
-   if ((pkt->seq > item->frc) ||
-       (pkt->frc != item->frc) ||
-       (item->areamask & (1 << pkt->seq)) ||
-       ((item->frc != pkt->seq) && (datalen != chunklen)))
-     return -1;
-   
    payload = ((char *) pkt) + sizeof(struct nstxhdr);
    item->timestamp = time(NULL);
-   
-   if (pkt->seq == item->frc)
-     item->datalen = (item->frc) * chunklen + datalen;
-   
-   memcpy((item->data + (chunklen * pkt->seq)), payload, datalen);
-   item->areamask |= (1 << pkt->seq);
-   
-   if (item->areamask == ((1 << (item->frc+1)) - 1)) {
-      return 1;
+   if (pkt->flags & NSTX_LF) {
+      item->frc = pkt->seq+1;
    }
    
+   add_data_chunk(item, pkt->seq, payload, datalen-sizeof(struct nstxhdr));
+   if (item->frc && (find_sequence(item) == item->frc)) {
+      return 1;
+   }
    return 0;
 }
 
@@ -153,8 +188,7 @@ static void check_timeouts(void) {
       ptr2 = ptr;
       ptr = ptr->next;
       if (now > (ptr2->timestamp + NSTX_TIMEOUT)) {
-	 free(ptr2->data);
-	 dealloc_item(ptr2);
+	 dealloc_item(ptr2, NULL);
       }
    }
 }
