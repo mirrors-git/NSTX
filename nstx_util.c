@@ -49,7 +49,7 @@ void dwrite (char *path, char *buf, int len) {
 void pktdump (char *prefix, unsigned short id, char *data, int len, int s) {
    int fd;
    char buf[30];
-   return;
+
    snprintf(buf, 30, "%s%hu%c", prefix, id, s ? 's' : 'r');
    if ((fd = open(buf, O_WRONLY|O_CREAT|O_TRUNC, 0600)) >= 0) {
       write(fd, data, len);

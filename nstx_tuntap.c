@@ -211,8 +211,6 @@ struct nstxmsg *nstx_select (int timeout)
       ret->len = recvfrom(nfd, ret->data, MAXPKT, 0,
 			  (struct sockaddr *) &ret->peer, &peerlen);
       if (ret->len > 0) {
-	 pktdump("/tmp/nstx/pkt.", *((unsigned short *)ret->data),
-		 ret->data, ret->len, 0);
 	 ret->src = FROMNS;
 	 return ret;
       }
@@ -223,7 +221,6 @@ struct nstxmsg *nstx_select (int timeout)
 
 void sendtun (char *data, int len)
 {
-//   printf("Sent len %d, csum %d\n", len, checksum(data, len));
    write(tfd, data, len);
 }
 
@@ -234,5 +231,4 @@ void sendns (char *data, int len, struct sockaddr *peer)
 	    sizeof(struct sockaddr_in));
    else
      send(nfd, data, len, 0);
-   pktdump("/tmp/nstx/pkt.", *((unsigned short *)data), data, len, 1);
 }
