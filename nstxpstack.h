@@ -26,22 +26,34 @@
 #ifndef NSTX_PSTACK_H
 #define NSTX_PSTACK_H
 
+struct clist
+{
+   int seq;
+   
+   char *data;
+   int len;
+   struct clist *next;
+};
+
 struct nstx_item {
    struct nstx_item *next;
    struct nstx_item *prev;
    
    unsigned short id;
-   unsigned short areamask;
-   int frc;
    unsigned int timestamp;
-   int datalen;
-   char * data;
+   int frc;
+   
+   struct clist *chunks;
 };
 
 struct nstx_senditem {
    struct nstx_senditem *next;
    
-   unsigned char data[SENDLEN + sizeof(struct nstxhdr) + 1];
+   unsigned char *data;
+   int id;
+   int len;
+   int offset;
+   int seq;
 };
 
 void nstx_handlepacket(char *, int, void(*)(char*,int));
