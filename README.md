@@ -17,4 +17,4 @@ Julien Oster \<frodo@sysv.de\>  \
 
 
 2022-08-24 **Florian Heinz** \<fh@sysv.de\>: 
-"The project is not currently under active development"
+_The project is not currently under active development_
