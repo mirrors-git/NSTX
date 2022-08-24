@@ -14,3 +14,6 @@ Creates a bi-directional IP-tunnel through (valid) DNS-requests.
 Florian Heinz \<sky@sysv.de\>   \
 Julien Oster \<frodo@sysv.de\>  \
 http://nstx.dereference.de/nstx/
+
+2022-08-24 **Florian Heinz** \<fh@sysv.de\>: 
+"The project is not currently under active development"
