@@ -40,7 +40,7 @@ https://bugs.debian.org/cgi-bin/pkgreport.cgi?archive=both;package=nstx
 
 * Import/sync the patches from Gentoo ports:
   \
-http://185.41.101.34/portage/trunk/net-vpn/nstx/files/
+https://gitweb.gentoo.org/repo/gentoo.git/tree/net-vpn/nstx/files
 
 * Import patches from NetBSD / pkgsrc:
   \
