@@ -16,5 +16,7 @@ Julien Oster \<frodo@sysv.de\>  \
 [http://nstx.dereference.de/nstx/](https://web.archive.org/web/20060715215126/http://nstx.dereference.de/nstx/)
 
 
+## Development
+
 2022-08-24 **Florian Heinz** \<fh@sysv.de\>: 
 _The project is not currently under active development_
